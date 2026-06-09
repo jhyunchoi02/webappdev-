@@ -23,11 +23,11 @@ st.set_page_config(
 # ------------------------------------------------------------
 GDP_INDICATOR = "NY.GDP.PCAP.CD"       # 1인당 GDP, current US$
 LIFE_INDICATOR = "SP.DYN.LE00.IN"      # 기대수명, years
+
 START_YEAR = 2000
 CURRENT_YEAR = datetime.date.today().year
 
-# World Bank 최신 자료는 보통 1~2년 늦게 공개되는 경우가 있으므로
-# 기본 연도는 현재연도 - 2로 설정합니다.
+# World Bank 자료는 보통 1~2년 늦게 제공되므로 기본 연도는 현재연도 - 2로 설정
 DEFAULT_YEAR = CURRENT_YEAR - 2
 
 
@@ -37,9 +37,9 @@ DEFAULT_YEAR = CURRENT_YEAR - 2
 @st.cache_data(ttl=60 * 60 * 24)
 def load_country_metadata():
     """
-    World Bank에서 국가 메타데이터를 불러옵니다.
+    World Bank 국가 메타데이터를 불러옵니다.
     World, High income, OECD members 같은 집계 데이터는 제외하고,
-    실제 국가 데이터만 남기기 위해 사용합니다.
+    실제 국가만 남기기 위해 사용합니다.
     """
     url = "https://api.worldbank.org/v2/country"
 
@@ -87,15 +87,14 @@ def load_country_metadata():
 def load_indicator_for_year(indicator_code, year):
     """
     World Bank API에서 특정 연도, 특정 지표 데이터만 불러옵니다.
-
-    전체 연도를 한 번에 가져오면 Streamlit Cloud에서 시간 초과가 날 수 있으므로
-    선택한 연도 데이터만 가져오도록 설계했습니다.
+    전체 연도를 한 번에 불러오면 Streamlit Cloud에서 시간 초과가 날 수 있어
+    선택한 연도 1개만 불러오도록 설계했습니다.
     """
     url = f"https://api.worldbank.org/v2/country/all/indicator/{indicator_code}"
 
     params = {
         "format": "json",
-        "per_page": 20000,
+        "per_page": 500,
         "date": str(year),
     }
 
@@ -135,44 +134,3 @@ def make_merged_dataset(selected_year):
     """
     country_meta = load_country_metadata()
 
-    # 선택한 연도의 1인당 GDP 데이터
-    gdp_df = load_indicator_for_year(
-        GDP_INDICATOR,
-        selected_year
-    ).rename(
-        columns={"value": "gdp_per_capita"}
-    )
-
-    # 선택한 연도의 기대수명 데이터
-    life_df = load_indicator_for_year(
-        LIFE_INDICATOR,
-        selected_year
-    ).rename(
-        columns={"value": "life_expectancy"}
-    )
-
-    # 국가 코드와 연도를 기준으로 병합
-    merged_df = pd.merge(
-        gdp_df[["country_name", "country_code", "year", "gdp_per_capita"]],
-        life_df[["country_code", "year", "life_expectancy"]],
-        on=["country_code", "year"],
-        how="inner"
-    )
-
-    # 실제 국가만 남기고 지역 정보를 추가
-    merged_df = pd.merge(
-        merged_df,
-        country_meta,
-        on="country_code",
-        how="inner"
-    )
-
-    # 숫자형으로 변환
-    merged_df["gdp_per_capita"] = pd.to_numeric(
-        merged_df["gdp_per_capita"],
-        errors="coerce"
-    )
-
-    merged_df["life_expectancy"] = pd.to_numeric(
-        merged_df["life_expectancy"],
-        errors="coerce"
