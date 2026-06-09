@@ -2,6 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 
 st.set_page_config(
     page_title="Global Top 10 Market Cap Dashboard",
@@ -9,29 +10,71 @@ st.set_page_config(
     layout="wide"
 )
 
-# 글로벌 시가총액 Top 10 기본 목록
-# Yahoo Finance에서 조회 가능한 ticker를 사용합니다.
-DEFAULT_COMPANIES = {
-    "NVIDIA": "NVDA",
-    "Apple": "AAPL",
-    "Alphabet": "GOOG",
-    "Microsoft": "MSFT",
-    "Amazon": "AMZN",
-    "TSMC": "TSM",
-    "Broadcom": "AVGO",
-    "Saudi Aramco": "2222.SR",
-    "Tesla": "TSLA",
-    "Meta Platforms": "META",
+# ------------------------------------------------------------
+# 기본 기업 정보
+# ------------------------------------------------------------
+COMPANY_META = {
+    "NVIDIA": {
+        "ticker": "NVDA",
+        "sector": "Semiconductors"
+    },
+    "Apple": {
+        "ticker": "AAPL",
+        "sector": "Consumer Electronics"
+    },
+    "Alphabet": {
+        "ticker": "GOOG",
+        "sector": "Internet Services"
+    },
+    "Microsoft": {
+        "ticker": "MSFT",
+        "sector": "Software / Cloud"
+    },
+    "Amazon": {
+        "ticker": "AMZN",
+        "sector": "E-Commerce / Cloud"
+    },
+    "TSMC": {
+        "ticker": "TSM",
+        "sector": "Semiconductors"
+    },
+    "Broadcom": {
+        "ticker": "AVGO",
+        "sector": "Semiconductors"
+    },
+    "Saudi Aramco": {
+        "ticker": "2222.SR",
+        "sector": "Energy"
+    },
+    "Tesla": {
+        "ticker": "TSLA",
+        "sector": "EV / Energy"
+    },
+    "Meta Platforms": {
+        "ticker": "META",
+        "sector": "Social / Advertising"
+    },
 }
 
-# 통화를 USD로 변환하기 위한 Yahoo Finance 환율 ticker
+# Yahoo Finance 환율 ticker
+# 1단위 통화를 USD로 환산하기 위한 ticker입니다.
 CURRENCY_TO_USD_TICKER = {
     "USD": None,
     "SAR": "SARUSD=X",
     "TWD": "TWDUSD=X",
+    "KRW": "KRWUSD=X",
+    "JPY": "JPYUSD=X",
+    "EUR": "EURUSD=X",
+    "GBP": "GBPUSD=X",
+    "CNY": "CNYUSD=X",
+    "HKD": "HKDUSD=X",
+    "CHF": "CHFUSD=X",
 }
 
 
+# ------------------------------------------------------------
+# 데이터 로딩 함수
+# ------------------------------------------------------------
 @st.cache_data(ttl=60 * 60)
 def get_fx_rate_to_usd(currency: str) -> float:
     """
@@ -65,7 +108,7 @@ def get_fx_rate_to_usd(currency: str) -> float:
 
 
 @st.cache_data(ttl=60 * 30)
-def load_company_data(companies: dict, period: str = "1y"):
+def load_company_data(selected_companies: list, period: str = "1y"):
     """
     yfinance를 이용해 각 기업의 가격 데이터와 현재 시가총액을 가져옵니다.
 
@@ -74,13 +117,18 @@ def load_company_data(companies: dict, period: str = "1y"):
     과거 시가총액 =
     현재 시가총액 x 과거 조정종가 / 최근 조정종가
 
-    단, 주식 수 변화, 자사주 매입, 증자, ADR 비율 변화 등은 완전히 반영되지 않을 수 있습니다.
+    주의:
+    주식 수 변화, 자사주 매입, 증자, ADR 비율 변화 등은
+    완전히 반영되지 않을 수 있습니다.
     """
     rows = []
     current_caps = []
     errors = []
 
-    for name, ticker in companies.items():
+    for company in selected_companies:
+        ticker = COMPANY_META[company]["ticker"]
+        sector = COMPANY_META[company]["sector"]
+
         try:
             tk = yf.Ticker(ticker)
 
@@ -91,7 +139,7 @@ def load_company_data(companies: dict, period: str = "1y"):
             )
 
             if hist.empty or "Close" not in hist:
-                errors.append(f"{name}({ticker}): 가격 데이터를 찾지 못했습니다.")
+                errors.append(f"{company}({ticker}): 가격 데이터를 찾지 못했습니다.")
                 continue
 
             fast = getattr(tk, "fast_info", {})
@@ -114,7 +162,7 @@ def load_company_data(companies: dict, period: str = "1y"):
                 current_market_cap = info.get("marketCap")
 
             if not current_market_cap:
-                errors.append(f"{name}({ticker}): 현재 시가총액 데이터를 찾지 못했습니다.")
+                errors.append(f"{company}({ticker}): 현재 시가총액 데이터를 찾지 못했습니다.")
                 continue
 
             currency = None
@@ -136,8 +184,9 @@ def load_company_data(companies: dict, period: str = "1y"):
 
             df = pd.DataFrame({
                 "Date": close.index.tz_localize(None),
-                "Company": name,
+                "Company": company,
                 "Ticker": ticker,
+                "Sector": sector,
                 "Market Cap USD": cap_usd.values,
                 "Market Cap Trillion USD": cap_usd.values / 1e12,
                 "Price": close.values,
@@ -147,8 +196,9 @@ def load_company_data(companies: dict, period: str = "1y"):
             rows.append(df)
 
             current_caps.append({
-                "Company": name,
+                "Company": company,
                 "Ticker": ticker,
+                "Sector": sector,
                 "Current Market Cap USD": current_cap_usd,
                 "Current Market Cap Trillion USD": current_cap_usd / 1e12,
                 "Currency": currency,
@@ -156,7 +206,7 @@ def load_company_data(companies: dict, period: str = "1y"):
             })
 
         except Exception as e:
-            errors.append(f"{name}({ticker}): {e}")
+            errors.append(f"{company}({ticker}): {e}")
 
     data = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
 
@@ -170,47 +220,132 @@ def load_company_data(companies: dict, period: str = "1y"):
     return data, caps, errors
 
 
-st.title("📈 글로벌 시가총액 Top 10 — 최근 1년 변화")
-st.caption("Yahoo Finance 데이터, yfinance, Plotly를 이용한 Streamlit Cloud용 주식 대시보드")
-
-with st.sidebar:
-    st.header("설정")
-
-    period = st.selectbox(
-        "조회 기간",
-        ["1y", "6mo", "2y", "5y"],
-        index=0
+# ------------------------------------------------------------
+# 분석용 데이터 생성 함수
+# ------------------------------------------------------------
+def calculate_returns(data: pd.DataFrame) -> pd.DataFrame:
+    returns = (
+        data.sort_values("Date")
+        .groupby("Company")
+        .agg(
+            first_cap=("Market Cap USD", "first"),
+            last_cap=("Market Cap USD", "last"),
+            sector=("Sector", "first"),
+            ticker=("Ticker", "first")
+        )
+        .reset_index()
     )
 
-    normalize = st.checkbox(
-        "시작일=100 지수로 보기",
-        value=False
+    returns["Return %"] = (
+        returns["last_cap"] / returns["first_cap"] - 1
+    ) * 100
+
+    return returns.sort_values("Return %", ascending=False)
+
+
+def calculate_volatility(data: pd.DataFrame) -> pd.DataFrame:
+    vol_data = data.sort_values(["Company", "Date"]).copy()
+
+    vol_data["Daily Return"] = (
+        vol_data
+        .groupby("Company")["Market Cap USD"]
+        .pct_change()
     )
 
-    show_points = st.checkbox(
-        "데이터 포인트 표시",
-        value=False
+    vol_df = (
+        vol_data
+        .groupby("Company")
+        .agg(
+            daily_volatility=("Daily Return", "std"),
+            sector=("Sector", "first"),
+            ticker=("Ticker", "first")
+        )
+        .reset_index()
     )
 
-    selected = st.multiselect(
-        "표시할 기업",
-        options=list(DEFAULT_COMPANIES.keys()),
-        default=list(DEFAULT_COMPANIES.keys())
+    vol_df["Annualized Volatility %"] = (
+        vol_df["daily_volatility"] * (252 ** 0.5) * 100
     )
 
-    st.divider()
+    return vol_df.sort_values("Annualized Volatility %", ascending=False)
 
-    st.markdown("### 기본 티커")
-    st.code(
-        "\n".join([f"{company}: {ticker}" for company, ticker in DEFAULT_COMPANIES.items()])
+
+def add_range_selector(fig):
+    fig.update_xaxes(
+        rangeslider_visible=True,
+        rangeselector=dict(
+            buttons=list([
+                dict(count=1, label="1M", step="month", stepmode="backward"),
+                dict(count=3, label="3M", step="month", stepmode="backward"),
+                dict(count=6, label="6M", step="month", stepmode="backward"),
+                dict(count=1, label="1Y", step="year", stepmode="backward"),
+                dict(step="all", label="ALL")
+            ])
+        )
     )
 
-companies = {
-    company: DEFAULT_COMPANIES[company]
-    for company in selected
-}
+    return fig
 
-data, caps, errors = load_company_data(companies, period)
+
+# ------------------------------------------------------------
+# 사이드바
+# ------------------------------------------------------------
+st.sidebar.title("📊 대시보드 설정")
+
+period = st.sidebar.selectbox(
+    "조회 기간",
+    ["1y", "6mo", "2y", "5y"],
+    index=0
+)
+
+selected_companies = st.sidebar.multiselect(
+    "표시할 기업",
+    options=list(COMPANY_META.keys()),
+    default=list(COMPANY_META.keys())
+)
+
+plotly_theme = st.sidebar.selectbox(
+    "Plotly 테마",
+    ["plotly_white", "plotly", "plotly_dark", "ggplot2", "seaborn", "simple_white"],
+    index=0
+)
+
+show_points = st.sidebar.checkbox(
+    "라인 차트에 데이터 포인트 표시",
+    value=False
+)
+
+show_annotations = st.sidebar.checkbox(
+    "선택 기업 최고점 주석 표시",
+    value=False
+)
+
+annotation_company = st.sidebar.selectbox(
+    "주석 표시 기업",
+    options=selected_companies if selected_companies else list(COMPANY_META.keys()),
+    index=0
+)
+
+st.sidebar.divider()
+
+st.sidebar.markdown("### 기본 기업 목록")
+for company, meta in COMPANY_META.items():
+    st.sidebar.caption(f"{company}: {meta['ticker']} / {meta['sector']}")
+
+
+# ------------------------------------------------------------
+# 메인 화면
+# ------------------------------------------------------------
+st.title("📈 글로벌 시가총액 Top 10 대시보드")
+st.caption(
+    "Yahoo Finance 데이터, yfinance, Plotly를 이용한 Streamlit Cloud용 대시보드"
+)
+
+if not selected_companies:
+    st.error("왼쪽 사이드바에서 최소 1개 이상의 기업을 선택하세요.")
+    st.stop()
+
+data, caps, errors = load_company_data(selected_companies, period)
 
 if errors:
     with st.expander("데이터 조회 알림", expanded=False):
@@ -221,6 +356,9 @@ if data.empty:
     st.error("표시할 데이터가 없습니다. 잠시 후 다시 시도하거나 ticker를 확인하세요.")
     st.stop()
 
+returns = calculate_returns(data)
+volatility = calculate_volatility(data)
+
 latest = (
     data
     .sort_values("Date")
@@ -228,103 +366,5 @@ latest = (
     .tail(1)
 )
 
-col1, col2, col3, col4 = st.columns(4)
-
-col1.metric(
-    "기업 수",
-    f"{latest['Company'].nunique():,}"
-)
-
-col2.metric(
-    "최대 시가총액",
-    f"${latest['Market Cap Trillion USD'].max():.2f}T"
-)
-
-col3.metric(
-    "합산 시가총액",
-    f"${latest['Market Cap Trillion USD'].sum():.2f}T"
-)
-
-col4.metric(
-    "최근 거래일",
-    str(latest["Date"].max().date())
-)
-
-plot_df = data.copy()
-
-y_col = "Market Cap Trillion USD"
-y_title = "시가총액, 조 달러 USD"
-
-if normalize:
-    plot_df = plot_df.sort_values("Date")
-    first_values = plot_df.groupby("Company")["Market Cap USD"].transform("first")
-    plot_df["Index"] = plot_df["Market Cap USD"] / first_values * 100
-
-    y_col = "Index"
-    y_title = "시작일=100 지수"
-
-fig = px.line(
-    plot_df,
-    x="Date",
-    y=y_col,
-    color="Company",
-    markers=show_points,
-    hover_data={
-        "Ticker": True,
-        "Market Cap Trillion USD": ":.3f",
-        "Price": ":.2f",
-        "Currency": True,
-    },
-    title=f"글로벌 시가총액 Top 10 최근 {period} 변화"
-)
-
-fig.update_layout(
-    hovermode="x unified",
-    legend_title_text="기업",
-    xaxis_title="날짜",
-    yaxis_title=y_title,
-    height=650,
-)
-
-st.plotly_chart(fig, use_container_width=True)
-
-st.subheader("현재 시가총액 순위")
-
-if not caps.empty:
-    show_caps = caps.copy()
-
-    show_caps["Current Market Cap USD"] = show_caps["Current Market Cap USD"].map(
-        lambda x: f"${x / 1e12:.3f}T"
-    )
-
-    show_caps["Current Market Cap Trillion USD"] = show_caps[
-        "Current Market Cap Trillion USD"
-    ].map(
-        lambda x: f"{x:.3f}"
-    )
-
-    show_caps["FX to USD"] = show_caps["FX to USD"].map(
-        lambda x: f"{x:.6f}"
-    )
-
-    st.dataframe(
-        show_caps,
-        use_container_width=True,
-        hide_index=True
-    )
-
-st.info(
-    "계산 방식: yfinance의 현재 시가총액을 기준값으로 사용하고, "
-    "최근 기간의 조정종가 변화율을 곱해 과거 시가총액을 근사했습니다. "
-    "따라서 유상증자, 자사주 매입, 주식분할, ADR 비율 변화 등 주식 수 변화는 "
-    "완전히 반영되지 않을 수 있습니다."
-)
-
-csv = data.to_csv(index=False).encode("utf-8-sig")
-
-st.download_button(
-    label="CSV 다운로드",
-    data=csv,
-    file_name="global_top10_marketcap_history.csv",
-    mime="text/csv"
-)
+# ------------------------------------------------------------
+# KPI 영역
